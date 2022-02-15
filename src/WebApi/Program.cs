@@ -1,111 +1,56 @@
 var builder = WebApplication.CreateBuilder(args);
+RegisterServices(builder.Services);
 
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
-builder.Services.AddScoped<IHotelRepository, HotelRepository>();
-builder.Services.AddDbContext<HotelDb>(options =>
-{
-    options.UseSqlite(builder.Configuration.GetConnectionString("Sqlite"));
-
-});
 var app = builder.Build();
+Configure(app);
 
-if(app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-    using var scope = app.Services.CreateScope();
-    var db  = scope.ServiceProvider.GetRequiredService<HotelDb>();
-    db.Database.EnsureCreated();
-}
-
-app.MapGet("/hotels", async (IHotelRepository repository) => 
-    Results.Extensions.Xml(await repository.GetHotelsAsync()))
-    .Produces<List<Hotel>>(StatusCodes.Status200OK)
-    .WithName("GetAllHotels")
-    .WithTags("Getters");
-
-app.MapGet("/hotels/{id}", async (int id, IHotelRepository repository) => 
-    await repository.GetHotelByIdAsync(id) is Hotel hotel 
-    ? Results.Ok(hotel) 
-    : Results.NotFound())
-    .Produces<Hotel>(StatusCodes.Status200OK)
-    .WithName("GetHotel")
-    .WithTags("Getters");
-
-app.MapPost("/hotels",async ([FromBody] Hotel hotel, IHotelRepository repository) =>
-    {
-        await repository.InsertHotelAsync(hotel);
-        await repository.SaveAsync();
-
-        return Results.Created($"/hotels/{hotel.Id}", hotel);
-    })
-    .Accepts<Hotel>("application/json")
-    .Produces<Hotel>(StatusCodes.Status201Created)
-    .WithName("CreateHotel")
-    .WithTags("Creators");
-
-app.MapPut("/hotels", async([FromBody] Hotel hotel, IHotelRepository repository) =>
-    {
-        await repository.UpdateHotelAsync(hotel);
-        await repository.SaveAsync();
-
-        return Results.NoContent();
-    })
-    .Accepts<Hotel>("application/json")
-    .WithName("UpdateHotel")
-    .WithTags("Updaters");
-
-app.MapDelete("/hotel/{id}", async (int id, IHotelRepository repository) =>
-    {
-        await repository.DeleteHotelAsync(id);
-        await repository.SaveAsync();
-
-        return Results.NoContent();
-    })
-    .WithName("DeleteHotel")
-    .WithTags("Deleters");
-
-app.MapGet("/hotels/search/name/{query}", async (string query, IHotelRepository repository) =>
-    await repository.GetHotelsAsync(query) is IEnumerable<Hotel> hotels
-    ? Results.Ok(hotels)
-    : Results.NotFound(Array.Empty<Hotel>()))
-    .Produces<List<Hotel>>(StatusCodes.Status200OK)
-    .Produces(StatusCodes.Status404NotFound)
-    .WithName("SearchHotels")
-    .WithTags("Getters")
-    .ExcludeFromDescription();
-
-app.MapGet("/hotels/search/location/{coordinate}", async (Coordinate coordinate, IHotelRepository repository) =>
-    await repository.GetHotelsAsync(coordinate) is IEnumerable<Hotel> hotels
-    ? Results.Ok(hotels)
-    : Results.NotFound(Array.Empty<Hotel>()))
-    .ExcludeFromDescription();
-
-app.UseHttpsRedirection();
+new AuthApi().Register(app);
+new HotelApi().Register(app);
 app.Run();
 
-
-public record Coordinate(double Latitude, double Longitude)
+void RegisterServices(IServiceCollection services)
 {
-    public static bool TryParse(string input, out Coordinate? coordinate)
+    services.AddEndpointsApiExplorer();
+    services.AddSwaggerGen();
+    services.AddScoped<IHotelRepository, HotelRepository>();
+    services.AddDbContext<HotelDb>(options =>
     {
-        coordinate = default;
-        var splitArray = input.Split(',', 2);
-        if (splitArray.Length != 2) return false;
-        if(!double.TryParse(splitArray[0], out var lat)) return false;
-        if (!double.TryParse(splitArray[1], out var lon)) return false;
+        options.UseSqlite(builder.Configuration.GetConnectionString("Sqlite"));
 
-        coordinate = new Coordinate(lat, lon);
-       
-        return true;
+    });
+    services.AddSingleton<ITokenService>(new TokenService());
+    services.AddSingleton<IUserRepository>(new UserRepository());
+    services.AddAuthorization();
+    services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+        .AddJwtBearer(option => {
+            option.TokenValidationParameters = new()
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+                ValidIssuer = builder.Configuration["Jwt:Issuer"],
+                ValidAudience = builder.Configuration["Jwt:Audience"],
+                IssuerSigningKey = new SymmetricSecurityKey(
+                    Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]))
+            };
+
+        });
+}
+
+void Configure(WebApplication app)
+{
+    app.UseAuthentication();
+    app.UseAuthorization();
+
+    if (app.Environment.IsDevelopment())
+    {
+        app.UseSwagger();
+        app.UseSwaggerUI();
+        using var scope = app.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<HotelDb>();
+        db.Database.EnsureCreated();
     }
 
-    public static async ValueTask<Coordinate> BindAsync(HttpContext httpContext, ParameterInfo parameter)
-    {
-        var input = httpContext.GetRouteValue(parameter.Name!) as string ?? string.Empty;
-        TryParse(input, out var coordinate);
-
-        return coordinate;
-    }
+    app.UseHttpsRedirection();
 }
