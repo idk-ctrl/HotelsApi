@@ -1,0 +1,2 @@
+# HotelsApi
+Minimals Api Tutorial
